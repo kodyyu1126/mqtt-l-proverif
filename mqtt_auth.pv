@@ -1,0 +1,107 @@
+(* =========================================================================
+   MQTT-L Protocol — Authentication Analysis
+   File    : mqtt_auth.pv
+   Tool    : ProVerif 2.05
+   Queries : Non-injective and injective correspondence for first-time
+             authentication and reconnection authentication.
+   ========================================================================= *)
+
+
+(* --- Channels --- *)
+
+free A_Broker_Ch : channel.
+free secure_ch   : channel [private].
+
+
+(* --- Cryptographic Primitives --- *)
+
+fun hash(bitstring) : bitstring.
+
+type skey.
+type pkey.
+fun pk(skey) : pkey.
+fun aenc(bitstring, pkey) : bitstring.
+reduc forall x : bitstring, sk : skey;
+    adec(aenc(x, pk(sk)), sk) = x.
+
+
+(* --- Private Constants --- *)
+
+free s1 : bitstring [private].
+
+
+(* --- Events --- *)
+
+event sensorSendsAuth(bitstring, bitstring).
+event brokerVerifiesAuth(bitstring, bitstring).
+event sensorReconnects(bitstring, bitstring).
+event brokerAcceptsReconnect(bitstring, bitstring).
+
+
+(* --- Security Queries --- *)
+
+(* Query 1: Non-injective correspondence (first-time authentication) *)
+query authVal : bitstring, hashEnd : bitstring;
+    event(brokerVerifiesAuth(authVal, hashEnd)) ==>
+    event(sensorSendsAuth(authVal, hashEnd)).
+
+(* Query 2: Injective correspondence (first-time authentication) *)
+query authVal : bitstring, hashEnd : bitstring;
+    inj-event(brokerVerifiesAuth(authVal, hashEnd)) ==>
+    inj-event(sensorSendsAuth(authVal, hashEnd)).
+
+(* Query 3: Injective correspondence (reconnection) *)
+query reconnectVal : bitstring, prevAuth : bitstring;
+    inj-event(brokerAcceptsReconnect(reconnectVal, prevAuth)) ==>
+    inj-event(sensorReconnects(reconnectVal, prevAuth)).
+
+
+(* --- Broker Process --- *)
+let ProcessBroker(broker_sk : skey) =
+    in(secure_ch, Hn : bitstring);
+
+    in(A_Broker_Ch, auth_value : bitstring);
+    let hash_auth = hash(auth_value) in
+    if hash_auth = Hn then
+    (
+        event brokerVerifiesAuth(auth_value, Hn);
+        out(A_Broker_Ch, auth_value);
+
+        in(A_Broker_Ch, reconnect_auth : bitstring);
+        let hash_reconnect = hash(reconnect_auth) in
+        if hash_reconnect = auth_value then
+        (
+            event brokerAcceptsReconnect(reconnect_auth, auth_value);
+            out(A_Broker_Ch, reconnect_auth)
+        )
+        else 0
+    )
+    else 0.
+
+
+(* --- Sensor A Process ---
+   Constructs a four-level hash chain from s1.
+   v0_n is the chain endpoint; v0_2 and v0_1 are released in order. *)
+let ProcessA(broker_pk : pkey) =
+    let v0   = hash(s1)    in
+    let v0_1 = hash(v0)    in
+    let v0_2 = hash(v0_1)  in
+    let v0_n = hash(v0_2)  in
+
+    out(secure_ch, v0_n);
+
+    event sensorSendsAuth(v0_2, v0_n);
+    out(A_Broker_Ch, v0_2);
+    in(A_Broker_Ch, ack1 : bitstring);
+
+    event sensorReconnects(v0_1, v0_2);
+    out(A_Broker_Ch, v0_1);
+    in(A_Broker_Ch, ack2 : bitstring).
+
+
+(* --- Main Process --- *)
+process
+    new broker_sk : skey;
+    let broker_pk = pk(broker_sk) in
+    out(A_Broker_Ch, broker_pk);
+    ( ProcessA(broker_pk) | ProcessBroker(broker_sk) )

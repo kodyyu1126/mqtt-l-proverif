@@ -1,0 +1,122 @@
+(* =========================================================================
+   MQTT-L Protocol — Confidentiality Analysis
+   File    : mqtt_confidentiality.pv
+   Tool    : ProVerif 2.05
+   Queries : Message secrecy and session key secrecy.
+   ========================================================================= *)
+
+
+(* --- Channels --- *)
+
+free ch_SB : channel.   (* Sensor <-> Broker *)
+free ch_UB : channel.   (* User   <-> Broker *)
+
+
+(* --- Cryptographic Primitives --- *)
+
+(* Chebyshev polynomial: T(k, x) models scalar multiplication T_k(x) *)
+fun T(bitstring, bitstring) : bitstring.
+
+type skey.
+type pkey.
+fun pk(skey) : pkey.
+fun aenc(bitstring, pkey) : bitstring.
+reduc forall x : bitstring, sk : skey;
+    adec(aenc(x, pk(sk)), sk) = x.
+
+fun senc(bitstring, bitstring) : bitstring.
+reduc forall x : bitstring, k : bitstring;
+    sdec(senc(x, k), k) = x.
+
+
+(* --- Private Constants --- *)
+
+free msg         : bitstring [private].
+free session_key : bitstring [private].
+
+
+(* --- Security Queries --- *)
+
+(* Query 1: Message secrecy *)
+query attacker(msg).
+
+(* Query 2: Session key secrecy *)
+query attacker(session_key).
+
+
+(* --- Broker Process ---
+   Acts as an honest relay; distributes the public parameter x_T
+   and forwards all ciphertexts without holding any private key. *)
+let Broker =
+    new x_T : bitstring;
+    out(ch_SB, x_T);
+    out(ch_UB, x_T);
+
+    in(ch_SB, E1 : bitstring);
+    out(ch_UB, E1);
+
+    in(ch_UB, E2 : bitstring);
+    out(ch_SB, E2);
+
+    in(ch_SB, C1 : bitstring);
+    out(ch_UB, C1);
+
+    in(ch_SB, C2 : bitstring);
+    out(ch_UB, C2).
+
+
+(* --- Sensor Process ---
+   Generates ephemeral scalar sk_S, computes A = T(sk_S, x_T),
+   derives shared key K1 = T(sk_S, B), then encrypts msg and session_key. *)
+let Sensor(sensor_sk : skey, user_pk : pkey) =
+    in(ch_SB, x_T : bitstring);
+    new sk_S : bitstring;
+    let A  = T(sk_S, x_T)      in
+    let E1 = aenc(A, user_pk)  in
+    out(ch_SB, E1);
+
+    in(ch_SB, E2 : bitstring);
+    let B          = adec(E2, sensor_sk)  in
+    let K1         = T(sk_S, B)           in
+    let ciphertext = senc(msg, K1)        in
+    out(ch_SB, ciphertext);
+
+    let test_cipher = senc(session_key, K1) in
+    out(ch_SB, test_cipher).
+
+
+(* --- User Process ---
+   Generates ephemeral scalar sk_U, computes B = T(sk_U, x_T),
+   derives shared key K1 = T(sk_U, A), then decrypts both ciphertexts. *)
+let User(user_sk : skey, sensor_pk : pkey) =
+    in(ch_UB, x_T : bitstring);
+    new sk_U : bitstring;
+    let B  = T(sk_U, x_T)       in
+    let E2 = aenc(B, sensor_pk) in
+    out(ch_UB, E2);
+
+    in(ch_UB, E1 : bitstring);
+    let A  = adec(E1, user_sk) in
+    let K1 = T(sk_U, A)        in
+
+    in(ch_UB, ciphertext : bitstring);
+    let clear  = sdec(ciphertext, K1)  in
+
+    in(ch_UB, test_cipher : bitstring);
+    let clear2 = sdec(test_cipher, K1) in
+    0.
+
+
+(* --- Main Process --- *)
+process
+    new sensor_sk : skey;
+    new user_sk   : skey;
+    let sensor_pk = pk(sensor_sk) in
+    let user_pk   = pk(user_sk)   in
+    out(ch_SB, sensor_pk);
+    out(ch_UB, user_pk);
+
+    ( !Sensor(sensor_sk, user_pk)
+    | !User(user_sk, sensor_pk)
+    | !Broker )
+    
