@@ -1,6 +1,6 @@
 (* =========================================================================
    MQTT-L Protocol — Confidentiality Analysis
-   File    : mqtt_confidentiality.pv
+   File    : mqtt_sec.pv
    Tool    : ProVerif 2.05
    Queries : Message secrecy and session key secrecy.
    ========================================================================= *)
